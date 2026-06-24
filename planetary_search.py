@@ -195,6 +195,13 @@ class TorchScoringTensors:
 
 
 @dataclass(frozen=True)
+class TorchRefineCandidatePool:
+    scores: Any
+    flat_indices: Any
+    capacity: int
+
+
+@dataclass(frozen=True)
 class GpuTuneStats:
     tooth_triples: int = 0
     batches: int = 0
@@ -571,14 +578,6 @@ def torch_sort(values: Any, *, dim: int, descending: bool) -> tuple[Any, Any]:
         return torch_module.sort(values, dim=dim, descending=descending)
 
 
-def torch_matrix_rank(matrix: Any, tolerance: float) -> Any:
-    torch_module = require_torch()
-    try:
-        return torch_module.linalg.matrix_rank(matrix, atol=tolerance, rtol=0.0)
-    except TypeError:  # pragma: no cover - older PyTorch compatibility.
-        return torch_module.linalg.matrix_rank(matrix, tol=tolerance)
-
-
 def build_torch_layout_tensors(
     template: LayoutTemplate,
     device: Any,
@@ -693,54 +692,38 @@ def solve_template_batch_torch(
     rhs = tensors.rhs_rows.unsqueeze(0).expand(batch_count, -1, -1)
     flat_matrices = matrices.reshape(batch_count * state_count, SYSTEM_ROW_COUNT, component_count)
     flat_rhs = rhs.reshape(batch_count * state_count, SYSTEM_ROW_COUNT)
-    flat_solutions = torch_module.full(
-        (batch_count * state_count, component_count),
-        math.nan,
-        device=device,
-        dtype=dtype,
+    if not hasattr(torch_module.linalg, "solve_ex"):  # pragma: no cover
+        raise RuntimeError("torch.linalg.solve_ex is required for CUDA search")
+
+    if SYSTEM_ROW_COUNT == component_count:
+        solve_matrices = flat_matrices
+        solve_rhs = flat_rhs
+    else:
+        transposed = flat_matrices.transpose(-2, -1)
+        solve_matrices = torch_module.matmul(transposed, flat_matrices)
+        solve_rhs = torch_module.matmul(
+            transposed,
+            flat_rhs.unsqueeze(-1),
+        ).squeeze(-1)
+
+    solutions, info = torch_module.linalg.solve_ex(solve_matrices, solve_rhs)
+    flat_valid = info == 0
+
+    residuals = torch_module.max(
+        torch_module.abs(
+            torch_module.matmul(flat_matrices, solutions.unsqueeze(-1)).squeeze(-1)
+            - flat_rhs
+        ),
+        dim=1,
+    ).values
+    allowed_residual = tolerance * max(1.0, float(SYSTEM_ROW_COUNT))
+    finite_solutions = torch_module.isfinite(solutions).all(dim=1)
+    flat_valid = flat_valid & finite_solutions & (residuals <= allowed_residual)
+    flat_solutions = torch_module.where(
+        flat_valid.reshape(-1, 1),
+        solutions,
+        torch_module.full_like(solutions, math.nan),
     )
-    flat_valid = torch_module.zeros(batch_count * state_count, device=device, dtype=torch_module.bool)
-
-    ranks = torch_matrix_rank(flat_matrices, tolerance)
-    full_rank = ranks >= component_count
-    selected = torch_module.nonzero(full_rank, as_tuple=False).flatten()
-    if selected.numel() > 0:
-        selected_matrices = flat_matrices.index_select(0, selected)
-        selected_rhs = flat_rhs.index_select(0, selected)
-        if SYSTEM_ROW_COUNT == component_count:
-            if hasattr(torch_module.linalg, "solve_ex"):
-                solutions, info = torch_module.linalg.solve_ex(selected_matrices, selected_rhs)
-                selected_ok = info == 0
-            else:  # pragma: no cover - older PyTorch compatibility.
-                solutions = torch_module.linalg.solve(selected_matrices, selected_rhs)
-                selected_ok = torch_module.ones(
-                    selected.shape[0],
-                    device=device,
-                    dtype=torch_module.bool,
-                )
-        else:
-            solutions = torch_module.linalg.lstsq(
-                selected_matrices,
-                selected_rhs.unsqueeze(-1),
-            ).solution.squeeze(-1)
-            selected_ok = torch_module.ones(
-                selected.shape[0],
-                device=device,
-                dtype=torch_module.bool,
-            )
-
-        residuals = torch_module.max(
-            torch_module.abs(
-                torch_module.matmul(selected_matrices, solutions.unsqueeze(-1)).squeeze(-1)
-                - selected_rhs
-            ),
-            dim=1,
-        ).values
-        allowed_residual = tolerance * max(1.0, float(SYSTEM_ROW_COUNT))
-        selected_ok = selected_ok & (residuals <= allowed_residual)
-
-        flat_solutions[selected] = solutions
-        flat_valid[selected] = selected_ok
 
     velocities = flat_solutions.reshape(batch_count, state_count, component_count)
     state_valid = flat_valid.reshape(batch_count, state_count)
@@ -1217,35 +1200,79 @@ def iter_tooth_index_batches(
     raise ValueError(f"unknown sampling mode: {sampling_mode}")
 
 
-def add_refine_candidates(
-    refine_candidates: list[tuple[float, int]],
+def make_refine_candidate_pool(
+    refine_limit: int,
+    device: Any,
+    score_dtype: Any,
+    index_dtype: Any,
+) -> TorchRefineCandidatePool:
+    torch_module = require_torch()
+    capacity = max(refine_limit * 4, refine_limit)
+    return TorchRefineCandidatePool(
+        scores=torch_module.full(
+            (capacity,),
+            math.inf,
+            device=device,
+            dtype=score_dtype,
+        ),
+        flat_indices=torch_module.full(
+            (capacity,),
+            -1,
+            device=device,
+            dtype=index_dtype,
+        ),
+        capacity=capacity,
+    )
+
+
+def update_refine_candidate_pool(
+    pool: TorchRefineCandidatePool,
     scores: Any,
     flat_indices: Any,
-    refine_limit: int,
-) -> None:
+) -> TorchRefineCandidatePool:
     torch_module = require_torch()
-    finite = torch_module.isfinite(scores)
-    if not bool(torch_module.any(finite).item()):
-        return
+    if scores.numel() == 0:
+        return pool
 
-    finite_scores = scores[finite]
-    finite_flat_indices = flat_indices[finite]
-    local_count = min(refine_limit, int(finite_scores.shape[0]))
+    local_count = min(pool.capacity, int(scores.shape[0]))
+    finite_scores = torch_module.where(
+        torch_module.isfinite(scores),
+        scores,
+        torch_module.full_like(scores, math.inf),
+    )
     local_scores, local_positions = torch_module.topk(
         finite_scores,
         k=local_count,
         largest=False,
     )
-    local_flat_indices = finite_flat_indices[local_positions]
-    refine_candidates.extend(
-        (float(score), int(flat_index))
-        for score, flat_index in zip(
-            local_scores.detach().cpu().tolist(),
-            local_flat_indices.detach().cpu().tolist(),
-        )
+    local_flat_indices = flat_indices[local_positions].to(pool.flat_indices.dtype)
+
+    combined_scores = torch_module.cat((pool.scores, local_scores))
+    combined_flat_indices = torch_module.cat((pool.flat_indices, local_flat_indices))
+    best_scores, best_positions = torch_module.topk(
+        combined_scores,
+        k=pool.capacity,
+        largest=False,
     )
-    refine_candidates.sort(key=lambda item: item[0])
-    del refine_candidates[max(refine_limit * 4, refine_limit):]
+    return TorchRefineCandidatePool(
+        scores=best_scores,
+        flat_indices=combined_flat_indices[best_positions],
+        capacity=pool.capacity,
+    )
+
+
+def refine_candidate_pool_to_cpu(
+    pool: TorchRefineCandidatePool,
+) -> list[tuple[float, int]]:
+    torch_module = require_torch()
+    finite = torch_module.isfinite(pool.scores)
+    scores = pool.scores[finite].detach().cpu().tolist()
+    flat_indices = pool.flat_indices[finite].detach().cpu().tolist()
+    return sorted(
+        (float(score), int(flat_index))
+        for score, flat_index in zip(scores, flat_indices)
+        if int(flat_index) >= 0
+    )
 
 
 def tune_candidate_gpu(
@@ -1280,7 +1307,12 @@ def tune_candidate_gpu(
     template = build_layout_template(topology, elements)
     layout_tensors = build_torch_layout_tensors(template, device=device, dtype=torch_module.float64)
     option_counts = tuple(len(options) for options in tooth_options_by_gearset)
-    refine_candidates: list[tuple[float, int]] = []
+    refine_candidate_pool = make_refine_candidate_pool(
+        refine_limit=refine_limit,
+        device=device,
+        score_dtype=torch_module.float64,
+        index_dtype=torch_module.long,
+    )
     tooth_triples = 0
     batches = 0
 
@@ -1323,7 +1355,11 @@ def tune_candidate_gpu(
             reverse_weight=reverse_weight,
             reject_shift_violations=reject_shift_violations,
         )
-        add_refine_candidates(refine_candidates, scores, flat_indices, refine_limit)
+        refine_candidate_pool = update_refine_candidate_pool(
+            refine_candidate_pool,
+            scores,
+            flat_indices,
+        )
         tooth_triples += int(flat_indices.numel())
         batches += 1
 
@@ -1331,8 +1367,9 @@ def tune_candidate_gpu(
     best_key: tuple[float, float, int, float] | None = None
     seen_flat_indexes: set[int] = set()
     refined_candidates = 0
+    refine_candidates = refine_candidate_pool_to_cpu(refine_candidate_pool)
 
-    for _score, flat_index in sorted(refine_candidates, key=lambda item: item[0]):
+    for _score, flat_index in refine_candidates:
         if flat_index in seen_flat_indexes:
             continue
         seen_flat_indexes.add(flat_index)
