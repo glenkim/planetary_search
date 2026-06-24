@@ -558,7 +558,7 @@ def require_torch() -> Any:
     if torch is None:
         raise RuntimeError(
             "PyTorch is required for CUDA search. Install dependencies from "
-            "scripts/requirements-planetary.txt."
+            "requirements-planetary.txt."
         )
     return torch
 
@@ -1273,7 +1273,7 @@ def tune_candidate_gpu(
     if np is None:
         raise RuntimeError(
             "NumPy is required to reconstruct exact GPU finalists. Install dependencies "
-            "from scripts/requirements-planetary.txt."
+            "from requirements-planetary.txt."
         )
 
     torch_module = require_torch()
@@ -2429,7 +2429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         normalize_args(args)
         if np is None:
-            parser.error("NumPy is required. Install dependencies from scripts/requirements-planetary.txt.")
+            parser.error("NumPy is required. Install dependencies from requirements-planetary.txt.")
         if args.self_test:
             run_self_tests()
             print("self-tests passed")

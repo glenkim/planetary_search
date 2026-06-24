@@ -1,6 +1,6 @@
-# Scripts
+# Planetary Search
 
-This directory contains helper scripts that are not part of the main Rust
+This repository contains a helper search tool that is not part of the main Rust
 dashboard binary.
 
 ## `planetary_search.py`
@@ -18,12 +18,14 @@ member connections, input/output assignments, friction-element placements,
 feasible tooth counts, and two-element apply states. It scores layouts against
 target forward ratios and an optional reverse ratio.
 
+Commands below assume they are run from this `planetary_search` directory.
+
 ### Requirements
 
 Install the Python dependencies from:
 
 ```bash
-python3 -m pip install -r scripts/requirements-planetary.txt
+python3 -m pip install -r requirements-planetary.txt
 ```
 
 The CPU path requires NumPy. The CUDA path requires PyTorch with CUDA support
@@ -32,7 +34,7 @@ and an NVIDIA GPU.
 Run the embedded checks with:
 
 ```bash
-python3 scripts/planetary_search.py --self-test
+python3 planetary_search.py --self-test
 ```
 
 ### How It Works
@@ -73,7 +75,7 @@ are rescored by the CPU oracle before being reported.
 Run a bounded CPU search:
 
 ```bash
-python3 scripts/planetary_search.py \
+python3 planetary_search.py \
   --backend cpu \
   --topology-limit 5 \
   --element-limit-per-topology 20 \
@@ -83,7 +85,7 @@ python3 scripts/planetary_search.py \
 Run on CUDA when PyTorch can see an NVIDIA GPU:
 
 ```bash
-python3 scripts/planetary_search.py \
+python3 planetary_search.py \
   --backend cuda \
   --device cuda:0 \
   --batch-size 32768 \
@@ -93,14 +95,14 @@ python3 scripts/planetary_search.py \
 Emit JSON instead of the text report:
 
 ```bash
-python3 scripts/planetary_search.py --json --top 5
+python3 planetary_search.py --json --top 5
 ```
 
 Search custom target ratios. The first seven values are forward ratios. The
 optional eighth value is reverse and must be negative:
 
 ```bash
-python3 scripts/planetary_search.py \
+python3 planetary_search.py \
   --targets 4.7,3.1,2.1,1.5,1.0,0.8,0.6,-3.0
 ```
 
@@ -170,7 +172,7 @@ CUDA-specific controls:
 Long searches can be resumed with JSON checkpoints:
 
 ```bash
-python3 scripts/planetary_search.py \
+python3 planetary_search.py \
   --backend cuda \
   --checkpoint /tmp/planetary-search.json \
   --checkpoint-every 25
@@ -179,7 +181,7 @@ python3 scripts/planetary_search.py \
 Resume from a checkpoint:
 
 ```bash
-python3 scripts/planetary_search.py \
+python3 planetary_search.py \
   --resume /tmp/planetary-search.json \
   --checkpoint /tmp/planetary-search.json
 ```
