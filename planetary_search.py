@@ -39,7 +39,7 @@ MEMBER_ORDER = {"S": 0, "C": 1, "R": 2}
 GEARSET_COUNT = 3
 ELEMENT_COUNT = 5
 APPLIED_ELEMENT_COUNT = 2
-DEFAULT_TARGETS = (4.7, 3.1, 2.1, 1.5, 1.0, 0.8, 0.6, -3.0)
+DEFAULT_TARGETS = (3.25, 2.23, 1.61, 1.24, 1.0, 0.63, -2.95)
 SUN_TEETH_BOUNDS = (14, 60)
 PLANET_TEETH_BOUNDS = (14, 50)
 RING_TEETH_BOUNDS = (42, 150)
@@ -2206,7 +2206,7 @@ def run_self_tests() -> None:
     six_forward = (4.0, 2.5, 1.6, 1.2, 1.0, 0.75)
     assert split_targets(six_forward) == (six_forward, None)
     assert split_targets(six_forward + (-3.0,)) == (six_forward, -3.0)
-    assert split_targets(DEFAULT_TARGETS) == (DEFAULT_TARGETS[:7], DEFAULT_TARGETS[7])
+    assert split_targets(DEFAULT_TARGETS) == (DEFAULT_TARGETS[:-1], DEFAULT_TARGETS[-1])
 
     for invalid_targets in (
         (4.0, 2.5, 1.6, 1.2, 1.0),

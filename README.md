@@ -103,7 +103,7 @@ optionally followed by a negative reverse ratio:
 
 ```bash
 python3 planetary_search.py \
-  --targets 4.7,3.1,2.1,1.5,1.0,0.8,0.6,-3.0
+  --targets 3.25,2.23,1.61,1.24,1.0,0.63,-2.95
 ```
 
 Run a six-speed target set:
