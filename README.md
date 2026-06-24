@@ -98,12 +98,19 @@ Emit JSON instead of the text report:
 python3 planetary_search.py --json --top 5
 ```
 
-Search custom target ratios. The first seven values are forward ratios. The
-optional eighth value is reverse and must be negative:
+Search custom target ratios. Provide six or seven positive forward ratios,
+optionally followed by a negative reverse ratio:
 
 ```bash
 python3 planetary_search.py \
   --targets 4.7,3.1,2.1,1.5,1.0,0.8,0.6,-3.0
+```
+
+Run a six-speed target set:
+
+```bash
+python3 planetary_search.py \
+  --targets 4.0,2.5,1.6,1.2,1.0,0.75,-3.0
 ```
 
 ### Search Controls

@@ -1835,15 +1835,20 @@ def search(args: argparse.Namespace) -> tuple[list[LayoutResult], dict[str, Any]
 
 
 def split_targets(targets: Sequence[float]) -> tuple[tuple[float, ...], float | None]:
-    if len(targets) < 7:
-        raise ValueError("at least seven forward targets are required")
+    if len(targets) > 0 and targets[-1] < 0.0:
+        forward_targets = tuple(targets[:-1])
+        reverse_target = targets[-1]
+    else:
+        forward_targets = tuple(targets)
+        reverse_target = None
 
-    forward_targets = tuple(targets[:7])
-    reverse_target = targets[7] if len(targets) > 7 else None
+    if len(forward_targets) not in (6, 7):
+        raise ValueError(
+            "provide six or seven positive forward targets, optionally followed by "
+            "a negative reverse ratio"
+        )
     if any(target <= 0.0 for target in forward_targets):
-        raise ValueError("the first seven targets must be positive forward ratios")
-    if reverse_target is not None and reverse_target >= 0.0:
-        raise ValueError("the optional eighth target must be a negative reverse ratio")
+        raise ValueError("forward targets must be positive ratios")
     return forward_targets, reverse_target
 
 
@@ -2017,7 +2022,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--targets",
         type=parse_float_list,
         default=DEFAULT_TARGETS,
-        help="Comma-separated ratios: seven forward values and optional reverse.",
+        help="Comma-separated ratios: six or seven forward values and optional negative reverse.",
     )
     parser.add_argument(
         "--standing-ratio-bounds",
@@ -2198,6 +2203,23 @@ def topology_from_components(
 
 
 def run_self_tests() -> None:
+    six_forward = (4.0, 2.5, 1.6, 1.2, 1.0, 0.75)
+    assert split_targets(six_forward) == (six_forward, None)
+    assert split_targets(six_forward + (-3.0,)) == (six_forward, -3.0)
+    assert split_targets(DEFAULT_TARGETS) == (DEFAULT_TARGETS[:7], DEFAULT_TARGETS[7])
+
+    for invalid_targets in (
+        (4.0, 2.5, 1.6, 1.2, 1.0),
+        six_forward + (0.6, 0.5),
+        six_forward + (0.0,),
+        six_forward + (0.6, -3.0, -2.0),
+    ):
+        try:
+            split_targets(invalid_targets)
+            raise AssertionError(f"invalid targets accepted: {invalid_targets}")
+        except ValueError:
+            pass
+
     left = StateResult((0, 1), 1.0, 1.0, ())
     right_single = StateResult((1, 2), 1.0, 1.0, ())
     right_double = StateResult((2, 3), 1.0, 1.0, ())
